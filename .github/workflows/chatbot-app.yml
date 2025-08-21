@@ -35,7 +35,7 @@ jobs:
             
         - name: Run tests        
           env:          
-            GOOGLE_GENAI_API_KEY: ${{ secrets.GOOGLE_GENAI_API_KEY }}          
+            OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}          
             API_MONGO: ${{ secrets.API_MONGO }}          
             EMAIL_ADMIN: ${{ secrets.EMAIL_ADMIN }}          
             EMAIL_PASS: ${{ secrets.EMAIL_PASS }}        
