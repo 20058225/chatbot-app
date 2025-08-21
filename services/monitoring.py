@@ -1,0 +1,216 @@
+# services/monitoring.py
+import logging
+import os
+import bson
+import pandas as pd
+from datetime import datetime, timezone
+from services.mongo import db
+
+timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+
+LOG_DIR = "logs"
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, "chatbot_monitor.log") 
+
+test_results_col = db["test_results"]
+monitoring_col = db["monitoring"]
+chats = db["chats"]
+
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+def log_event(message: str, level: str = "info"):
+    getattr(logging, level.lower(), logging.info)(message)
+
+
+def get_log_file_path():
+    return os.path.abspath(LOG_FILE)
+
+
+def read_logs():
+    if os.path.exists(LOG_FILE):
+        with open(LOG_FILE, "r") as f:
+            return f.read()
+    return "No logs found."
+
+
+# MODEL_VERSION = "GPT-4o-mini-v1" 
+MODEL_VERSION = "gpt-3.5-turbo" 
+
+def log_user_interaction(user_id, question, answer, intent_tag, sentiment, priority, thumbs_up, thumbs_down, is_fallback, response_time):
+    doc = {
+        "user_id": user_id,
+        "question": question,
+        "answer": answer,
+        "intent_tag": intent_tag,
+        "sentiment": sentiment,
+        "priority": priority,
+        "thumbs_up": thumbs_up,
+        "thumbs_down": thumbs_down,
+        "is_fallback": is_fallback,
+        "response_time": response_time,
+        "model_version": MODEL_VERSION,
+        "timestamp": datetime.now(timezone.utc)
+    }
+    monitoring_col.insert_one(doc)
+
+    logging.info(
+        f"user_id={user_id} | intent={intent_tag} | priority={priority} | sentiment={sentiment} | "
+        f"thumbs_up={thumbs_up} | thumbs_down={thumbs_down} | fallback={is_fallback} | response_time={response_time:.3f}s\n"
+        f"Q: {question}\nA: {answer}\nmodel_version={MODEL_VERSION}"
+    )
+
+
+def log_error(user_id, error):
+    err_type = type(error).__name__
+    doc = {
+        "user_id": user_id,
+        "error_type": err_type,
+        "error_msg": str(error),
+        "timestamp": datetime.now(timezone.utc)
+    }
+    monitoring_col.insert_one(doc)
+    logging.error(f"user_id={user_id} | Exception type={err_type}: {error}")
+
+
+def generate_report():
+    total_responses = monitoring_col.count_documents({"intent_tag": {"$exists": True}})
+    if total_responses == 0:
+        return "No interactions logged yet."
+
+    pipeline = [
+        {"$match": {"intent_tag": {"$exists": True}}},
+        {
+            "$group": {
+                "_id": None,
+                "avg_response_time": {"$avg": "$response_time"},
+                "fallback_count": {"$sum": {"$cond": ["$is_fallback", 1, 0]}},
+                "thumbs_up_count": {"$sum": {"$cond": ["$thumbs_up", 1, 0]}},
+                "thumbs_down_count": {"$sum": {"$cond": ["$thumbs_down", 1, 0]}},
+                "unique_users": {"$addToSet": "$user_id"},
+            }
+        }
+    ]
+    result_list = list(monitoring_col.aggregate(pipeline))
+    if not result_list:
+        return "No interactions logged yet."
+
+    result = result_list[0]
+
+    fallback_rate = result["fallback_count"] / total_responses
+    total_feedback = result["thumbs_up_count"] + result["thumbs_down_count"]
+    satisfaction_score = ((result["thumbs_up_count"] - result["thumbs_down_count"]) / total_feedback) if total_feedback > 0 else 0
+    unique_users = len(result["unique_users"])
+
+    error_count = monitoring_col.count_documents({"error_type": {"$exists": True}})
+
+    report = f"""
+Chatbot Monitoring Report:
+--------------------------
+Total Responses: {total_responses}
+Unique Users: {unique_users}
+Avg. AI Response Time: {result['avg_response_time']:.3f} seconds
+Fallback Rate: {fallback_rate:.2%}
+Satisfaction Score (thumbs up minus down): {satisfaction_score:.2f}
+Total Errors: {error_count}
+"""
+    return report
+
+
+def log_execution(
+    gpt3_time,
+    gpt3_score,
+    bert_time,
+    bert_score,
+    execution_type="test",
+    user_id=None,
+    query=None,
+    gpt3_response=None,
+    bert_response=None
+):
+    os.makedirs(LOG_DIR, exist_ok=True)
+    filename = os.path.join(LOG_DIR, f"{execution_type}_log.csv")
+    all_log_file = os.path.join(LOG_DIR, "all_log.csv")
+
+    now_dt = datetime.now(timezone.utc)
+    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    log_entry_gpt3 = {
+        "timestamp": now_dt,
+        "model": "gpt-3",
+        "execution_time": gpt3_time,
+        "score": gpt3_score,
+        "execution_type": execution_type,
+        "log_source": "simulation"
+    }
+    if user_id: 
+        log_entry_gpt3["user_id"] = user_id
+    if query: 
+        log_entry_gpt3["query"] = query
+    if gpt3_response: 
+        log_entry_gpt3["response"] = gpt3_response
+
+    log_entry_bert = {
+        "timestamp": now_dt,
+        "model": "bert",
+        "execution_time": bert_time,
+        "score": bert_score,
+        "execution_type": execution_type,
+        "log_source": "simulation"
+    }
+    if user_id: 
+        log_entry_bert["user_id"] = user_id
+    if query: 
+        log_entry_bert["query"] = query
+    if bert_response: 
+        log_entry_bert["response"] = bert_response
+
+    test_results_col.insert_one(log_entry_gpt3)
+    test_results_col.insert_one(log_entry_bert)
+
+    df = pd.DataFrame([log_entry_gpt3, log_entry_bert])
+    for file in [filename, all_log_file]:
+        if os.path.exists(file):
+            df.to_csv(file, mode="a", header=False, index=False)
+        else:
+            df.to_csv(file, index=False)
+    
+    logging.info(
+        f"Execution registered: GPT-3 (t={gpt3_time}s, score={gpt3_score}) | "
+        f"BERT (t={bert_time}s, score={bert_score}) | query={query}"
+    )
+
+
+def load_logs(log_type="all"):
+
+    if log_type == "train":
+        cursor = monitoring_col.find({"event": "train_models"})
+        data = list(cursor)
+    elif log_type == "test":
+        cursor = test_results_col.find({"log_source": "simulation"})
+        data = list(cursor)
+    else:
+        train_logs = list(monitoring_col.find({"event": "train_models"}))
+        test_logs = list(test_results_col.find({"log_source": "simulation"}))
+        data = train_logs + test_logs
+
+    if not data:
+        return pd.DataFrame()
+    
+    df = pd.DataFrame(data)
+    df = df.apply(lambda col: col.map(lambda x: str(x) if isinstance(x, bson.ObjectId) else x))
+
+    if "timestamp" in df.columns:
+        try:
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+        except Exception:
+            pass
+
+    for col in ["execution_time", "score", "gpt3_time", "bert_time", "bert_score"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return df

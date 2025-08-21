@@ -1,0 +1,11 @@
+myenv/
+__pycache__/
+*.pyc
+logs/
+chatbot-*.log
+config/.env
+/data
+/ml/models
+/simulation/result
+extract_short.py
+extract_structure.py
