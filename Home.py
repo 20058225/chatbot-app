@@ -13,7 +13,7 @@ warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 load_dotenv("config/.env")
 
 required_vars = [
-    "OPENAI_API_KEY", "GOOGLE_GENAI_API_KEY", "API_MONGO", "EMAIL_ADMIN",
+    "OPENAI_API_KEY", "API_MONGO", "EMAIL_ADMIN",
     "EMAIL_PASS", "DOCKER_USERNAME", "DOCKER_PASSWORD", 
     "RENDER_API_KEY", "RENDER_DEPLOY_HOOK",
 ]
