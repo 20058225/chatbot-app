@@ -2,6 +2,8 @@
 #===================
 
 import streamlit as st
+import subprocess, sys
+from pathlib import Path
 import pandas as pd
 from bson import ObjectId
 from pathlib import Path
@@ -10,7 +12,8 @@ import altair as alt
 
 from services.mongo import db
 
-st.set_page_config(page_title="📊 Chatbot Dashboard", page_icon="👩‍💻", layout="wide")
+st.set_page_config(page_title="📊 Chatbot Dashboard"#, page_icon="👩‍💻"
+                   , layout="wide")
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -31,14 +34,14 @@ knowledge = db["knowledge"]
 def get_recent(collection, filter={}, sort_field="start_time", limit=50):
     return list(collection.find(filter).sort(sort_field, -1).limit(limit))
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📚 FAQs",
     "📄 Knowledge Articles",
     "💬 Chat History & Editor",
-    "📊 User & Message Stats"
+    "📊 User & Message Stats",
+    "⚙️ Train Models"
 ])
 
-# --- 🔹 TAB 1: FAQs Management ---
 with tab1:
     st.subheader("📚 FAQs")
 
@@ -105,8 +108,6 @@ with tab1:
                 del st.session_state['editing_faq_answer']
                 st.rerun()
 
-
-# --- 🔹 TAB 2: Knowledge Articles ---
 with tab2:
     st.subheader("📄 Knowledge Articles")
 
@@ -178,7 +179,6 @@ with tab2:
                 del st.session_state['editing_article_content']
                 st.rerun()
 
-# --- 🔹 TAB 3: Chat History ---
 with tab3:
     st.subheader("💬 Chat History")
 
@@ -258,8 +258,6 @@ with tab3:
         except Exception as e:
             st.error(f"Invalid _id or error: {e}")
 
-
-# --- 🔹 TAB 4: User & Message Stats ---
 with tab4:        
     st.subheader("📊 User & Message Statistics")
 
@@ -337,3 +335,29 @@ with tab4:
         st.altair_chart(chart, use_container_width=True)
     else:
         st.info("No records with intent tags found in chat messages.")
+
+with tab5:
+    st.subheader("⚙️ Train Models (TF-IDF + Logistic Regression)")
+    uploaded_file = st.file_uploader("Upload CSV (customer_support_tickets-like)", type=["csv"])
+    if uploaded_file:
+        DATA_DIR = Path("data"); DATA_DIR.mkdir(parents=True, exist_ok=True)
+        csv_path = DATA_DIR / uploaded_file.name
+        csv_path.write_bytes(uploaded_file.getbuffer())
+        st.success(f"Saved: {csv_path}")
+        st.dataframe(pd.read_csv(csv_path).head())
+
+        if st.button("🚀 Run training"):
+            with st.spinner("Training with run_evaluation.py ..."):
+                cmd = [
+                    sys.executable, "run_evaluation.py",
+                    "--raw_csv", str(csv_path),
+                    "--task", "both", "--cv", "0",
+                    "--ng_min", "1", "--ng_max", "2",
+                    "--C", "2.0", "--max_features", "100000"
+                ]
+                res = subprocess.run(cmd, check=False, capture_output=True, text=True)
+                st.code(res.stdout or "", language="bash")
+                if res.returncode == 0:
+                    st.success("Models saved to ml/models/*_pipeline.joblib")
+                else:
+                    st.error(res.stderr or "Unknown error")

@@ -1,0 +1,14 @@
+.git
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.vscode/
+.idea/
+venv/
+myenv/
+logs/
+data/
+ml/models/
+*.log
+.DS_Store

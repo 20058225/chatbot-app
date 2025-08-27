@@ -41,6 +41,7 @@ except Exception as e:
 # Environment Variable Loading
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 client = OpenAI()
+model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  
 
 email_admin = os.getenv("EMAIL_ADMIN")
 email_pass = os.getenv("EMAIL_PASS")
@@ -65,7 +66,13 @@ def log_event(event_type, details, status="success", log_source="production"):
 
 @st.cache_data
 def load_faq_df():
-    return pd.read_csv("data/train_model.csv")
+    import pandas as pd
+    path = "data/customer_support_tickets.csv"
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
 
 
 @st.cache_resource(show_spinner=False)
@@ -92,15 +99,15 @@ def get_bert_embeddings(text):
 def generate_gpt3_reply(prompt: str) -> str:
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",  
+            model=model,  
             messages=[{"role": "user", "content": prompt}],
             max_tokens=200,
             temperature=0.7,
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        logging.error(f"GPT-3 Error: {e}")
-        return f"[GPT-3 Error] {str(e)}"
+        logging.error(f"GPT Error: {e}")
+        return f"[GPT Error] {str(e)}"
 
 
 def predict_sentiment_with_text(text):
@@ -123,7 +130,8 @@ def predict_priority_with_text(text):
         return "Low"
 
 
-st.set_page_config(page_title="Chatbot", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="Chatbot" #, page_icon="🤖"
+                   , layout="wide")
 
 if "user" not in st.session_state:
     st.session_state.user = None
@@ -146,7 +154,6 @@ def is_similar(a, b, threshold=0.85):
     a, b = str(a).lower(), str(b).lower()
     return SequenceMatcher(None, a, b).ratio() > threshold
 
-
 def get_ai_reply(user_input):
     try:
         faq_entries = list(faq.find({}, {"_id": 0}).limit(10))
@@ -156,8 +163,10 @@ def get_ai_reply(user_input):
         
         knowledge_articles = list(knowledge.find({}, {"_id": 0}).limit(5))
         
-        faq_context = "\n".join([f"Q: {e.get('question','')}\nA: {e.get('answer','')}" 
-            for e in faq_entries])
+        faq_context = "\n".join([
+            f"Q: {e.get('question','')}\nA: {e.get('answer','')}" 
+            for e in faq_entries
+        ])
 
         intent_context = "\n".join([
             f"[Intent: {i.get('tag','')}]\n"
@@ -166,38 +175,39 @@ def get_ai_reply(user_input):
             for i in intent_entries
         ])
 
-        kb_context = "\n".join([f"Title: {a.get('title','')}\nContent: {a.get('content','')}"
-            for a in knowledge_articles])
+        kb_context = "\n".join([
+            f"Title: {a.get('title','')}\nContent: {a.get('content','')}"
+            for a in knowledge_articles
+        ])
 
-        full_context = f"""
-You are a support assistant for TechFix Solutions.
-Use the company's FAQ, known intent patterns,
-and support knowledge base to better answer customer questions.
+        system_prompt = (
+            "You are a support assistant for TechFix Solutions. "
+            "Use the company's FAQ, known intent patterns, and support knowledge base to better answer customer questions. "
+            "Be profissional, claro e objetivo."
+        )
+        user_prompt = (
+            f"=== FAQs ===\n{faq_context}\n\n"
+            f"=== Intents ===\n{intent_context}\n\n"
+            f"=== Knowledge Articles ===\n{kb_context}\n\n"
+            f"USER QUESTION: {user_input}\n\n"
+            "Respond professionally and clearly based on the context above."
+        )
 
-=== FAQs ===
-{faq_context}
-
-=== Intents ===
-{intent_context}
-
-=== Knowledge Articles ===
-{kb_context}
-
-USER: {user_input}
-Respond professionally and clearly based on the context above.
-""".strip()
-
-        chat = model.start_chat(history=[])
-        response = chat.send_message(full_context)
-        return response.text.strip()
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.5,
+            max_tokens=400,
+        )
+        return response.choices[0].message.content.strip()
 
     except Exception as e:
         logging.error(f"get_ai_reply error: {e}")
-
-        try:
-            return generate_gpt3_reply(user_input)
-        except Exception:
-            return f"Sorry, there was an error with the AI: {e}"
+        fallback_prompt = f"{system_prompt}\n\n{user_prompt}"
+        return generate_gpt3_reply(fallback_prompt)
 
 
 def generate_bot_response(user_input):
@@ -382,7 +392,7 @@ def handle_unanswered(user, question, request_type="unknown"):
             "timestamp": datetime.now(timezone.utc)
         })
     except Exception as e:
-        logging.error("❌ Failed to log unanswered question:", e)
+        logging.error("❌ Failed to log unanswered question: %s", e)
         st.error("❌ Failed to store unanswered question.")
 
     subject = (f"[Chatbot - Unanswered] New question from {user['email']}")
@@ -641,7 +651,6 @@ def chat_interface():
             question = msg.get("question")
             answer, tag = generate_bot_response(question)
             bot_time = datetime.now(timezone.utc)            
-            emb = get_bert_embeddings(msg["question"])
 
             try:
                 emb = get_bert_embeddings(question)
